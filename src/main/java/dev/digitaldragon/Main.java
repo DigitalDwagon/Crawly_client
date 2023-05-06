@@ -29,9 +29,14 @@ public class Main {
         try {
             // Retrieve URLs from the queue
             List<String> urls = retrieveUrlsFromQueue(username, maxUrlsToRetrieve);
-
+            System.out.println(String.format("Processing %s URLs as %s", urls.size(), username));
             // Process each URL
             for (String url : urls) {
+
+                if (!url.startsWith("http://") && !url.startsWith("https://")) {
+                    System.out.println("Skipping URL " + url + " due to unsupported protocol");
+                    return;
+                }
                 System.out.println("Processing URL: " + url);
 
                 // Send HTTP request to the URL
@@ -41,9 +46,16 @@ public class Main {
                 connection.setRequestProperty("User-Agent", user_agent);
 
                 int responseCode = connection.getResponseCode();
+                InputStream inputStream;
+
+                if (responseCode >= 400 && responseCode < 600) {
+                    inputStream = connection.getErrorStream();
+                } else {
+                    inputStream = connection.getInputStream();
+                }
 
                 // Extract discovered URLs from the response HTML
-                List<String> discoveredUrls = extractUrlsFromHtml(connection.getInputStream(), url);
+                List<String> discoveredUrls = extractUrlsFromHtml(inputStream, url);
 
                 if (responseCode == HttpURLConnection.HTTP_MOVED_PERM || responseCode == HttpURLConnection.HTTP_MOVED_TEMP) {
                     discoveredUrls.add(connection.getHeaderField("Location"));
