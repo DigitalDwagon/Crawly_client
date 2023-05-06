@@ -1,0 +1,144 @@
+package dev.digitaldragon;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Scanner;
+import java.util.stream.Collectors;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
+import org.jsoup.select.Elements;
+
+
+public class Main {
+
+    public static void main(String[] args) {
+        String username = "DigitalDragon";
+        String user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36";
+        int maxUrlsToRetrieve = 100;
+
+        try {
+            // Retrieve URLs from the queue
+            List<String> urls = retrieveUrlsFromQueue(username, maxUrlsToRetrieve);
+
+            // Process each URL
+            for (String url : urls) {
+                System.out.println("Processing URL: " + url);
+
+                // Send HTTP request to the URL
+                HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
+                connection.setRequestMethod("GET");
+                connection.setInstanceFollowRedirects(false); // disable automatic redirect following
+                connection.setRequestProperty("User-Agent", user_agent);
+
+                int responseCode = connection.getResponseCode();
+
+                // Extract discovered URLs from the response HTML
+                List<String> discoveredUrls = extractUrlsFromHtml(connection.getInputStream(), url);
+
+                if (responseCode == HttpURLConnection.HTTP_MOVED_PERM || responseCode == HttpURLConnection.HTTP_MOVED_TEMP) {
+                    discoveredUrls.add(connection.getHeaderField("Location"));
+                }
+
+                // Submit finished URL and discovered URLs to the tracker
+                submitToTracker(url, discoveredUrls, responseCode, username);
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private static List<String> retrieveUrlsFromQueue(String username, int maxUrlsToRetrieve) throws IOException {
+        String url = String.format("http://localhost:4567/queue?username=%s&amount=%d", username, maxUrlsToRetrieve);
+        HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
+        connection.setRequestMethod("GET");
+        String responseJson = readResponse(connection);
+        JSONObject jsonResponse = new JSONObject(responseJson);
+        JSONArray jsonUrls = jsonResponse.getJSONArray("urls");
+        List<String> urls = new ArrayList<>();
+        for (int i = 0; i < jsonUrls.length(); i++) {
+            urls.add(jsonUrls.getString(i));
+        }
+        return urls;
+    }
+
+    private static List<String> extractUrlsFromHtml(InputStream inputStream, String baseUrl) throws IOException {
+        List<String> urls = new ArrayList<>();
+        StringBuilder htmlBuilder = new StringBuilder();
+        BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
+        String line;
+        while ((line = reader.readLine()) != null) {
+            htmlBuilder.append(line);
+        }
+        Document doc = Jsoup.parse(htmlBuilder.toString(), baseUrl);
+        Elements links = doc.select("a[href]");
+        for (Element link : links) {
+            String absUrl = link.absUrl("href");
+            if (!absUrl.isEmpty()) {
+                urls.add(absUrl);
+            }
+        }
+        Elements media = doc.select("[src]");
+        for (Element src : media) {
+            String absUrl = src.absUrl("src");
+            if (!absUrl.isEmpty()) {
+                urls.add(absUrl);
+            }
+        }
+        Elements imports = doc.select("link[href]");
+        for (Element link : imports) {
+            String absUrl = link.absUrl("href");
+            if (!absUrl.isEmpty()) {
+                urls.add(absUrl);
+            }
+        }
+        return urls;
+    }
+
+    private static void submitToTracker(String url, List<String> discoveredUrls, int responseCode, String username) throws IOException {
+        String apiUrl = "http://localhost:4567/submit?username=DigitalDragon";
+        JSONObject jsonBody = new JSONObject();
+        jsonBody.put("url", url);
+        jsonBody.put("discovered", new JSONArray(discoveredUrls));
+        jsonBody.put("user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36");
+        jsonBody.put("response", responseCode);
+        jsonBody.put("username", username);
+        String requestBody = jsonBody.toString();
+        HttpURLConnection connection = (HttpURLConnection) new URL(apiUrl).openConnection();
+        connection.setRequestMethod("POST");
+        connection.setRequestProperty("Content-Type", "application/json");
+        connection.setRequestProperty("Content-Length", String.valueOf(requestBody.length()));
+        connection.setDoOutput(true);
+        connection.getOutputStream().write(requestBody.getBytes());
+        String responseJson = readResponse(connection);
+        System.out.println("Submitted URL: " + url);
+    }
+
+    private static String readResponse(HttpURLConnection connection) throws IOException {
+        Scanner scanner = new Scanner(connection.getInputStream());
+        scanner.useDelimiter("\\A");
+        return scanner.hasNext() ? scanner.next() : "";
+    }
+
+    private static List<String> extractUrlsFromLine(String line) {
+        List<String> urls = new ArrayList<>();
+        Document doc = Jsoup.parse(line);
+        Elements links = doc.select("a[href]");
+        for (Element link : links) {
+            String url = link.attr("abs:href");
+            if (!url.isEmpty()) {
+                urls.add(url);
+            }
+        }
+        return urls;
+    }
+}
