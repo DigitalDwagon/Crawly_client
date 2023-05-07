@@ -10,6 +10,7 @@ import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Scanner;
+import java.util.concurrent.*;
 import java.util.stream.Collectors;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -18,55 +19,130 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
+import javax.net.ssl.SSLHandshakeException;
+
 
 public class Main {
 
     public static void main(String[] args) {
         String username = "DigitalDragon";
         String user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36";
-        int maxUrlsToRetrieve = 100;
+        int maxUrlsToRetrieve = 2000;
+        int numThreads = 200; // set the number of threads to use
+        int minTasksWaiting = 250;
 
-        try {
+        ExecutorService executor = Executors.newFixedThreadPool(numThreads);
+
+
+        while (true) {
+            if (((ThreadPoolExecutor) executor).getQueue().size() < minTasksWaiting) {
+                try {
+                    List<String> urls = retrieveUrlsFromQueue(username, maxUrlsToRetrieve);
+
+                    for (String url : urls) {
+                        if (!url.startsWith("http://") && !url.startsWith("https://")) {
+                            System.out.println("Skipping URL " + url + " due to unsupported protocol");
+                            continue;
+                        }
+                        System.out.println("Queuing URL: " + url);
+
+                        executor.submit(() -> {
+                            try {
+                                // Send HTTP request to the URL
+                                HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
+                                connection.setRequestMethod("GET");
+                                connection.setInstanceFollowRedirects(false); // disable automatic redirect following
+                                connection.setRequestProperty("User-Agent", user_agent);
+
+                                int responseCode = connection.getResponseCode();
+                                InputStream inputStream;
+
+                                if (responseCode >= 400) {
+                                    inputStream = connection.getErrorStream();
+                                } else {
+                                    inputStream = connection.getInputStream();
+                                }
+
+                                // Extract discovered URLs from the response HTML
+                                List<String> discoveredUrls = extractUrlsFromHtml(inputStream, url);
+
+                                if (responseCode == HttpURLConnection.HTTP_MOVED_PERM || responseCode == HttpURLConnection.HTTP_MOVED_TEMP) {
+                                    discoveredUrls.add(connection.getHeaderField("Location"));
+                                }
+
+                                // Submit finished URL and discovered URLs to the tracker
+                                submitToTracker(url, discoveredUrls, responseCode, username);
+
+                            } catch (IOException e) {
+                                e.printStackTrace();
+                            }
+                        });
+                    }
+
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+
+        /*try {
             // Retrieve URLs from the queue
-            List<String> urls = retrieveUrlsFromQueue(username, maxUrlsToRetrieve);
+
             System.out.println(String.format("Processing %s URLs as %s", urls.size(), username));
-            // Process each URL
+
+            // Create a fixed thread pool to execute tasks concurrently
+            ExecutorService executor = Executors.newFixedThreadPool(numThreads);
+
+            // Process each URL using a separate thread
             for (String url : urls) {
 
                 if (!url.startsWith("http://") && !url.startsWith("https://")) {
                     System.out.println("Skipping URL " + url + " due to unsupported protocol");
-                    return;
+                    continue;
                 }
                 System.out.println("Processing URL: " + url);
 
-                // Send HTTP request to the URL
-                HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
-                connection.setRequestMethod("GET");
-                connection.setInstanceFollowRedirects(false); // disable automatic redirect following
-                connection.setRequestProperty("User-Agent", user_agent);
+                // Submit a task to the executor to process the URL
+                executor.submit(() -> {
+                    try {
+                        // Send HTTP request to the URL
+                        HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
+                        connection.setRequestMethod("GET");
+                        connection.setInstanceFollowRedirects(false); // disable automatic redirect following
+                        connection.setRequestProperty("User-Agent", user_agent);
 
-                int responseCode = connection.getResponseCode();
-                InputStream inputStream;
+                        int responseCode = connection.getResponseCode();
+                        InputStream inputStream;
 
-                if (responseCode >= 400 && responseCode < 600) {
-                    inputStream = connection.getErrorStream();
-                } else {
-                    inputStream = connection.getInputStream();
-                }
+                        if (responseCode >= 400) {
+                            inputStream = connection.getErrorStream();
+                        } else {
+                            inputStream = connection.getInputStream();
+                        }
 
-                // Extract discovered URLs from the response HTML
-                List<String> discoveredUrls = extractUrlsFromHtml(inputStream, url);
+                        // Extract discovered URLs from the response HTML
+                        List<String> discoveredUrls = extractUrlsFromHtml(inputStream, url);
 
-                if (responseCode == HttpURLConnection.HTTP_MOVED_PERM || responseCode == HttpURLConnection.HTTP_MOVED_TEMP) {
-                    discoveredUrls.add(connection.getHeaderField("Location"));
-                }
+                        if (responseCode == HttpURLConnection.HTTP_MOVED_PERM || responseCode == HttpURLConnection.HTTP_MOVED_TEMP) {
+                            discoveredUrls.add(connection.getHeaderField("Location"));
+                        }
 
-                // Submit finished URL and discovered URLs to the tracker
-                submitToTracker(url, discoveredUrls, responseCode, username);
+                        // Submit finished URL and discovered URLs to the tracker
+                        submitToTracker(url, discoveredUrls, responseCode, username);
+
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+                });
             }
-        } catch (IOException e) {
+
+            // Shutdown the executor and wait for all tasks to complete
+            executor.shutdown();
+            executor.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS);
+
+        } catch (IOException | InterruptedException e) {
             e.printStackTrace();
-        }
+        }*/
     }
 
     private static List<String> retrieveUrlsFromQueue(String username, int maxUrlsToRetrieve) throws IOException {
