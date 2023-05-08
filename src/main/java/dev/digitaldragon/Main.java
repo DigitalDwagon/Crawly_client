@@ -24,7 +24,7 @@ import javax.net.ssl.SSLHandshakeException;
 
 public class Main {
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws InterruptedException {
         String username = "DigitalDragon";
         String user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36";
         int maxUrlsToRetrieve = 2000;
@@ -33,18 +33,26 @@ public class Main {
 
         ExecutorService executor = Executors.newFixedThreadPool(numThreads);
 
+        boolean runOnceAndExit = true; //do not change
 
-        while (true) {
+
+        while (runOnceAndExit) {
+            //runOnceAndExit = false; //comment out to run once and exit
             if (((ThreadPoolExecutor) executor).getQueue().size() < minTasksWaiting) {
                 try {
-                    List<String> urls = retrieveUrlsFromQueue(username, maxUrlsToRetrieve);
-
+                    List<String> urls = new ArrayList<>();
+                    try {
+                        urls = retrieveUrlsFromQueue(username, maxUrlsToRetrieve);
+                        System.out.printf("Got %s urls from tracker.%n", urls.size());
+                    } catch (IOException e){
+                        //do nothing.
+                    }
                     for (String url : urls) {
                         if (!url.startsWith("http://") && !url.startsWith("https://")) {
                             System.out.println("Skipping URL " + url + " due to unsupported protocol");
                             continue;
                         }
-                        System.out.println("Queuing URL: " + url);
+                        //System.out.println("Queuing URL: " + url);
 
                         executor.submit(() -> {
                             try {
@@ -74,12 +82,12 @@ public class Main {
                                 submitToTracker(url, discoveredUrls, responseCode, username);
 
                             } catch (IOException e) {
-                                e.printStackTrace();
+                                System.out.printf("Item failure due to %s (on %s)%n", e.getClass(), url);
                             }
                         });
                     }
 
-                } catch (IOException e) {
+                } catch (Exception e) {
                     e.printStackTrace();
                 }
             }
@@ -146,7 +154,7 @@ public class Main {
     }
 
     private static List<String> retrieveUrlsFromQueue(String username, int maxUrlsToRetrieve) throws IOException {
-        String url = String.format("http://localhost:4567/queue?username=%s&amount=%d", username, maxUrlsToRetrieve);
+        String url = String.format("http://localhost:1234/queue?username=%s&amount=%d", username, maxUrlsToRetrieve);
         HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
         connection.setRequestMethod("GET");
         String responseJson = readResponse(connection);
@@ -193,7 +201,7 @@ public class Main {
     }
 
     private static void submitToTracker(String url, List<String> discoveredUrls, int responseCode, String username) throws IOException {
-        String apiUrl = "http://localhost:4567/submit?username=DigitalDragon";
+        String apiUrl = "http://localhost:1234/submit?username=DigitalDragon";
         JSONObject jsonBody = new JSONObject();
         jsonBody.put("url", url);
         jsonBody.put("discovered", new JSONArray(discoveredUrls));
@@ -208,7 +216,7 @@ public class Main {
         connection.setDoOutput(true);
         connection.getOutputStream().write(requestBody.getBytes());
         String responseJson = readResponse(connection);
-        System.out.println("Submitted URL: " + url);
+        //System.out.println("Submitted URL: " + url);
     }
 
     private static String readResponse(HttpURLConnection connection) throws IOException {
