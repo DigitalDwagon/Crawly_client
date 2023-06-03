@@ -1,9 +1,6 @@
 package dev.digitaldragon;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
+import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.URL;
@@ -28,17 +25,20 @@ public class Main {
         String username = "DigitalDragon";
         String user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36";
         int maxUrlsToRetrieve = 2000;
-        int numThreads = 200; // set the number of threads to use
+        int numThreads = 400; // set the number of threads to use
         int minTasksWaiting = 250;
+        int numUrlsRunMax = 6000; //set the total number of urls you want to run.
+        boolean runForever = true; //set true to run forever
+        int numUrlsRunTotal = 0;
 
         ExecutorService executor = Executors.newFixedThreadPool(numThreads);
 
         boolean runOnceAndExit = true; //do not change
 
 
-        while (runOnceAndExit) {
+        while (runOnceAndExit && (numUrlsRunTotal < numUrlsRunMax || runForever)) {
             //runOnceAndExit = false; //comment out to run once and exit
-            if (((ThreadPoolExecutor) executor).getQueue().size() < minTasksWaiting) {
+            if (((ThreadPoolExecutor) executor).getQueue().isEmpty()) {
                 try {
                     List<String> urls = new ArrayList<>();
                     try {
@@ -47,6 +47,7 @@ public class Main {
                     } catch (IOException e){
                         //do nothing.
                     }
+                    numUrlsRunTotal = numUrlsRunTotal + urls.size();
                     for (String url : urls) {
                         if (!url.startsWith("http://") && !url.startsWith("https://")) {
                             System.out.println("Skipping URL " + url + " due to unsupported protocol");
@@ -154,7 +155,7 @@ public class Main {
     }
 
     private static List<String> retrieveUrlsFromQueue(String username, int maxUrlsToRetrieve) throws IOException {
-        String url = String.format("http://localhost:1234/queue?username=%s&amount=%d", username, maxUrlsToRetrieve);
+        String url = String.format("http://localhost:443/queue?username=%s&amount=%d", username, maxUrlsToRetrieve);
         HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
         connection.setRequestMethod("GET");
         String responseJson = readResponse(connection);
@@ -169,13 +170,7 @@ public class Main {
 
     private static List<String> extractUrlsFromHtml(InputStream inputStream, String baseUrl) throws IOException {
         List<String> urls = new ArrayList<>();
-        StringBuilder htmlBuilder = new StringBuilder();
-        BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
-        String line;
-        while ((line = reader.readLine()) != null) {
-            htmlBuilder.append(line);
-        }
-        Document doc = Jsoup.parse(htmlBuilder.toString(), baseUrl);
+        Document doc = Jsoup.parse(inputStream, null, baseUrl);
         Elements links = doc.select("a[href]");
         for (Element link : links) {
             String absUrl = link.absUrl("href");
@@ -201,7 +196,7 @@ public class Main {
     }
 
     private static void submitToTracker(String url, List<String> discoveredUrls, int responseCode, String username) throws IOException {
-        String apiUrl = "http://localhost:1234/submit?username=DigitalDragon";
+        String apiUrl = "http://localhost:443/submit?username=DigitalDragon";
         JSONObject jsonBody = new JSONObject();
         jsonBody.put("url", url);
         jsonBody.put("discovered", new JSONArray(discoveredUrls));
