@@ -1,9 +1,7 @@
 package dev.digitaldragon;
 
 import java.io.*;
-import java.net.HttpURLConnection;
-import java.net.MalformedURLException;
-import java.net.URL;
+import java.net.*;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Scanner;
@@ -11,7 +9,9 @@ import java.util.concurrent.*;
 import java.util.stream.Collectors;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.jsoup.Connection;
 import org.jsoup.Jsoup;
+import org.jsoup.UnsupportedMimeTypeException;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
@@ -20,142 +20,132 @@ import javax.net.ssl.SSLHandshakeException;
 
 
 public class Main {
+    public static final int NUM_THREADS = 100;
+    public static final String USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36";
+    public static final String CLIENT_NAME = "Crawly_prod 0.0.2";
+    public static final String TRACKER = "http://localhost:443";
+    public static final int MAX_URLS = 1000; //set 0 to disable
+    public static final String USERNAME = "DigitalDragon";
+    public static String IP;
 
-    public static void main(String[] args) throws InterruptedException {
-        String username = "DigitalDragon";
-        String user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36";
-        int maxUrlsToRetrieve = 2000;
-        int numThreads = 400; // set the number of threads to use
-        int minTasksWaiting = 250;
-        int numUrlsRunMax = 6000; //set the total number of urls you want to run.
-        boolean runForever = true; //set true to run forever
-        int numUrlsRunTotal = 0;
+    public static void main(String[] args) throws InterruptedException, IOException {
+        ExecutorService executor = Executors.newFixedThreadPool(NUM_THREADS);
+        int done = 0;
 
-        ExecutorService executor = Executors.newFixedThreadPool(numThreads);
+        IP = getIpAddress();
+        if (IP == null)
+            return;
 
-        boolean runOnceAndExit = true; //do not change
+        while (done < MAX_URLS || MAX_URLS == 0) {
+            List<String> urls = retrieveUrlsFromQueue(USERNAME, Math.min(MAX_URLS - done, 2000));
 
-
-        while (runOnceAndExit && (numUrlsRunTotal < numUrlsRunMax || runForever)) {
-            //runOnceAndExit = false; //comment out to run once and exit
-            if (((ThreadPoolExecutor) executor).getQueue().isEmpty()) {
-                try {
-                    List<String> urls = new ArrayList<>();
-                    try {
-                        urls = retrieveUrlsFromQueue(username, maxUrlsToRetrieve);
-                        System.out.printf("Got %s urls from tracker.%n", urls.size());
-                    } catch (IOException e){
-                        //do nothing.
-                    }
-                    numUrlsRunTotal = numUrlsRunTotal + urls.size();
-                    for (String url : urls) {
-                        if (!url.startsWith("http://") && !url.startsWith("https://")) {
-                            System.out.println("Skipping URL " + url + " due to unsupported protocol");
-                            continue;
-                        }
-                        //System.out.println("Queuing URL: " + url);
-
-                        executor.submit(() -> {
-                            try {
-                                // Send HTTP request to the URL
-                                HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
-                                connection.setRequestMethod("GET");
-                                connection.setInstanceFollowRedirects(false); // disable automatic redirect following
-                                connection.setRequestProperty("User-Agent", user_agent);
-
-                                int responseCode = connection.getResponseCode();
-                                InputStream inputStream;
-
-                                if (responseCode >= 400) {
-                                    inputStream = connection.getErrorStream();
-                                } else {
-                                    inputStream = connection.getInputStream();
-                                }
-
-                                // Extract discovered URLs from the response HTML
-                                List<String> discoveredUrls = extractUrlsFromHtml(inputStream, url);
-
-                                if (responseCode == HttpURLConnection.HTTP_MOVED_PERM || responseCode == HttpURLConnection.HTTP_MOVED_TEMP) {
-                                    discoveredUrls.add(connection.getHeaderField("Location"));
-                                }
-
-                                // Submit finished URL and discovered URLs to the tracker
-                                submitToTracker(url, discoveredUrls, responseCode, username);
-
-                            } catch (IOException e) {
-                                System.out.printf("Item failure due to %s (on %s)%n", e.getClass(), url);
-                            }
-                        });
-                    }
-
-                } catch (Exception e) {
-                    e.printStackTrace();
-                }
-            }
-        }
-
-        /*try {
-            // Retrieve URLs from the queue
-
-            System.out.println(String.format("Processing %s URLs as %s", urls.size(), username));
-
-            // Create a fixed thread pool to execute tasks concurrently
-            ExecutorService executor = Executors.newFixedThreadPool(numThreads);
-
-            // Process each URL using a separate thread
             for (String url : urls) {
-
-                if (!url.startsWith("http://") && !url.startsWith("https://")) {
-                    System.out.println("Skipping URL " + url + " due to unsupported protocol");
-                    continue;
-                }
-                System.out.println("Processing URL: " + url);
-
-                // Submit a task to the executor to process the URL
                 executor.submit(() -> {
+                    //try {
+                        System.out.println("Trying crawl: " + url);
+                        CrawlResult result = getOutlinks(url);
                     try {
-                        // Send HTTP request to the URL
-                        HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
-                        connection.setRequestMethod("GET");
-                        connection.setInstanceFollowRedirects(false); // disable automatic redirect following
-                        connection.setRequestProperty("User-Agent", user_agent);
-
-                        int responseCode = connection.getResponseCode();
-                        InputStream inputStream;
-
-                        if (responseCode >= 400) {
-                            inputStream = connection.getErrorStream();
-                        } else {
-                            inputStream = connection.getInputStream();
-                        }
-
-                        // Extract discovered URLs from the response HTML
-                        List<String> discoveredUrls = extractUrlsFromHtml(inputStream, url);
-
-                        if (responseCode == HttpURLConnection.HTTP_MOVED_PERM || responseCode == HttpURLConnection.HTTP_MOVED_TEMP) {
-                            discoveredUrls.add(connection.getHeaderField("Location"));
-                        }
-
-                        // Submit finished URL and discovered URLs to the tracker
-                        submitToTracker(url, discoveredUrls, responseCode, username);
-
+                        submitToTracker(result);
                     } catch (IOException e) {
                         e.printStackTrace();
+                        throw new RuntimeException(e);
                     }
+                    System.out.println("Submitting crawl: "  + url);
+                    //} catch (Exception e) {
+                    //    System.out.println("Crawl failed: " + e.getClass().getName() + " (for" + url + ")");
+                    //}
                 });
+                done++;
+            }
+        }
+        executor.shutdown();
+    }
+
+    public static CrawlResult getOutlinks(String url) {
+        List<String> outlinks = new ArrayList<>();
+        CrawlResult crawlResult = new CrawlResult();
+
+        try {
+            Connection connection = Jsoup.connect(url);
+            connection.followRedirects(false);
+            connection.ignoreHttpErrors(true);
+            Connection.Response response = connection.execute();
+            Document doc = response.parse();
+
+            crawlResult.setStatus(response.statusCode());
+            crawlResult.setCrawlUrl(url);
+            crawlResult.setIp(IP);
+
+            if (response.statusCode() == 301 || response.statusCode() == 302) {
+                crawlResult.addUrl(response.header("Location"));
+                return crawlResult;
             }
 
-            // Shutdown the executor and wait for all tasks to complete
-            executor.shutdown();
-            executor.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS);
+            // Find all anchor tags
+            Elements anchorTags = doc.select("a[href]");
+            for (Element anchorTag : anchorTags) {
+                String href = anchorTag.attr("abs:href");
+                crawlResult.addUrl(href);
+            }
 
-        } catch (IOException | InterruptedException e) {
+            // Find all image tags
+            Elements imageTags = doc.select("img[src]");
+            for (Element imageTag : imageTags) {
+                String src = imageTag.attr("abs:src");
+                crawlResult.addUrl(src);
+            }
+
+            // Find all script tags
+            Elements scriptTags = doc.select("script[src]");
+            for (Element scriptTag : scriptTags) {
+                String src = scriptTag.attr("abs:src");
+                crawlResult.addUrl(src);
+            }
+
+            // Find all link tags (CSS)
+            Elements linkTags = doc.select("link[href]");
+            for (Element linkTag : linkTags) {
+                String href = linkTag.attr("abs:href");
+                crawlResult.addUrl(href);
+            }
+        } catch (UnsupportedMimeTypeException e) {
+            return null;
+        } catch (ConnectException e) {
+            crawlResult.setStatus(0);
+            crawlResult.setCrawlUrl(url);
+            crawlResult.setIp(IP);
+        } catch (FileNotFoundException e) {
+            System.out.println(e.getCause().getMessage());
+            return null;
+        } catch (IOException e) {
             e.printStackTrace();
-        }*/
+            return null;
+        }
+
+        return crawlResult;
+    }
+
+    private static String getIpAddress() throws IOException {
+        // Get the external IP address
+        URL ipUrl = new URL("https://api.ipify.org");
+        HttpURLConnection ipConnection = (HttpURLConnection) ipUrl.openConnection();
+        ipConnection.setRequestMethod("GET");
+
+        int ipStatusCode = ipConnection.getResponseCode();
+        String externalIpAddress = "";
+        if (ipStatusCode == HttpURLConnection.HTTP_OK) {
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(ipConnection.getInputStream()))) {
+                externalIpAddress = reader.readLine();
+                return externalIpAddress;
+            }
+        } else {
+            System.out.println("Error occurred while retrieving external IP address. Status code: " + ipStatusCode);
+        }
+        return null;
     }
 
     private static List<String> retrieveUrlsFromQueue(String username, int maxUrlsToRetrieve) throws IOException {
-        String url = String.format("http://localhost:443/queue?username=%s&amount=%d", username, maxUrlsToRetrieve);
+        String url = String.format(TRACKER + "/queue?username=%s&amount=%d", username, maxUrlsToRetrieve);
         HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
         connection.setRequestMethod("GET");
         String responseJson = readResponse(connection);
@@ -168,41 +158,15 @@ public class Main {
         return urls;
     }
 
-    private static List<String> extractUrlsFromHtml(InputStream inputStream, String baseUrl) throws IOException {
-        List<String> urls = new ArrayList<>();
-        Document doc = Jsoup.parse(inputStream, null, baseUrl);
-        Elements links = doc.select("a[href]");
-        for (Element link : links) {
-            String absUrl = link.absUrl("href");
-            if (!absUrl.isEmpty()) {
-                urls.add(absUrl);
-            }
-        }
-        Elements media = doc.select("[src]");
-        for (Element src : media) {
-            String absUrl = src.absUrl("src");
-            if (!absUrl.isEmpty()) {
-                urls.add(absUrl);
-            }
-        }
-        Elements imports = doc.select("link[href]");
-        for (Element link : imports) {
-            String absUrl = link.absUrl("href");
-            if (!absUrl.isEmpty()) {
-                urls.add(absUrl);
-            }
-        }
-        return urls;
-    }
-
-    private static void submitToTracker(String url, List<String> discoveredUrls, int responseCode, String username) throws IOException {
-        String apiUrl = "http://localhost:443/submit?username=DigitalDragon";
+    private static void submitToTracker(CrawlResult result) throws IOException {
+        String apiUrl = TRACKER + "/jobs/submit?username=DigitalDragon";
         JSONObject jsonBody = new JSONObject();
-        jsonBody.put("url", url);
-        jsonBody.put("discovered", new JSONArray(discoveredUrls));
+        jsonBody.put("url", result.getCrawlUrl());
+        jsonBody.put("discovered", new JSONArray(result.getUrls()));
         jsonBody.put("user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36");
-        jsonBody.put("response", responseCode);
-        jsonBody.put("username", username);
+        jsonBody.put("response", result.getStatus());
+        jsonBody.put("username", USERNAME);
+        jsonBody.put("ip", result.getIp());
         String requestBody = jsonBody.toString();
         HttpURLConnection connection = (HttpURLConnection) new URL(apiUrl).openConnection();
         connection.setRequestMethod("POST");
@@ -218,18 +182,5 @@ public class Main {
         Scanner scanner = new Scanner(connection.getInputStream());
         scanner.useDelimiter("\\A");
         return scanner.hasNext() ? scanner.next() : "";
-    }
-
-    private static List<String> extractUrlsFromLine(String line) {
-        List<String> urls = new ArrayList<>();
-        Document doc = Jsoup.parse(line);
-        Elements links = doc.select("a[href]");
-        for (Element link : links) {
-            String url = link.attr("abs:href");
-            if (!url.isEmpty()) {
-                urls.add(url);
-            }
-        }
-        return urls;
     }
 }
